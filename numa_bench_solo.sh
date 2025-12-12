@@ -19,7 +19,7 @@ mkdir -p "$OUTDIR"
 
 # Start DuckDB benchmark runner
 echo "[*] Starting DuckDB benchmark runner..."
-numactl $RUNNER "$BENCHMARK_EXPR" --out="$OUTDIR/timings.log" &
+numactl --cpunodebind=0 --membind=0 $RUNNER "$BENCHMARK_EXPR" --out="$OUTDIR/timings.log" &
 BENCHPID=$!
 
 echo "[*] Benchmark PID = $BENCHPID"
