@@ -24,32 +24,40 @@ BENCHPID=$!
 
 echo "[*] Benchmark PID = $BENCHPID"
 
-# Start perf (Intel NUMA events)
-echo "[*] Starting perf..."
-perf stat -e \
-  mem_load_uops_retired.local_dram, \
-  mem_load_uops_retired.remote_dram, \
-  offcore_response.demand_data_rd.l3_hit.local_dram, \
-  offcore_response.demand_data_rd.l3_hit.remote_dram \
-  -p $BENCHPID \
-  2> "$OUTDIR/perf_numa.log" &
-PERFPID=$!
+# Start numastat sampler (1 Hz)
+echo "[*] Starting numastat sampler..."
+(
+  # Print CSV header once
+  echo "timestamp,metric,node0,node1,node2,node3"
 
-# Start numastat
-echo "[*] Starting numastat..."
-numastat -p $BENCHPID > "$OUTDIR/numastat.log" &
+  while kill -0 "$BENCHPID" 2>/dev/null; do
+      TS=$(date +%s)
+
+      # Run numastat -p
+      numastat -p "$BENCHPID" | \
+      awk -v ts="$TS" '
+        /^[A-Za-z]/ {
+            name=$1
+            gsub(":", "", name)
+            printf "%s,%s",$0 == "" ? "" : ts, name
+            for (i=2;i<=NF;i++) printf ",%s", $i
+            printf "\n"
+        }
+      '
+
+      sleep 1
+  done
+) > "$OUTDIR/numastat.csv" &
 NUMAPID=$!
 
 # Wait for benchmark to exit
 echo "[*] Waiting for DuckDB benchmark to finish..."
-wait $BENCHPID
+wait "$BENCHPID"
 
 # Cleanup
-echo "[*] Benchmark complete. Killing perf + numastat..."
-kill $PERFPID 2>/dev/null || true
-kill $NUMAPID 2>/dev/null || true
+echo "[*] Benchmark complete. Killing numastat..."
+kill "$NUMAPID" 2>/dev/null || true
 
 echo "[*] Done! Results in: $OUTDIR/"
-echo "    - perf_numa.log"
-echo "    - numastat.log"
+echo "    - numastat.csv"
 echo "    - timings.log"
