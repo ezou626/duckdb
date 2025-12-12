@@ -219,6 +219,8 @@ struct DBConfigOptions {
 #endif
 	//! Whether to pin threads to cores (linux only, default AUTOMATIC: on when there are more than 64 cores)
 	ThreadPinMode pin_threads = ThreadPinMode::AUTO;
+	//! Whether to enable NUMA awareness (default: true, auto-detects NUMA availability)
+	bool enable_numa = true;
 
 	bool operator==(const DBConfigOptions &other) const;
 };

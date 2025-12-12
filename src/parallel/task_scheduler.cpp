@@ -3,6 +3,7 @@
 #include "duckdb/common/chrono.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/numa_topology.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 #ifndef DUCKDB_NO_THREADS
@@ -537,11 +538,23 @@ void TaskScheduler::RelaunchThreadsInternal(int32_t n) {
 		// we are increasing the number of threads: launch them and run tasks on them
 		idx_t create_new_threads = new_thread_count - threads.size();
 
+		// Initialize NUMA topology if not already done
+		NUMATopology::Initialize();
+
 		// Whether to pin threads to cores
 		static constexpr idx_t THREAD_PIN_THRESHOLD = 64;
 		const auto pin_threads = db.config.options.pin_threads == ThreadPinMode::ON ||
 		                         (db.config.options.pin_threads == ThreadPinMode::AUTO &&
 		                          std::thread::hardware_concurrency() > THREAD_PIN_THRESHOLD);
+
+		// Get NUMA topology information
+		const auto numa_node_count = NUMATopology::GetNUMANodeCount();
+		const bool use_numa = pin_threads && db.config.options.enable_numa &&
+		                      NUMATopology::IsNUMAAvailable() && numa_node_count > 1;
+
+		// Track thread counts per NUMA node for round-robin distribution
+		vector<idx_t> threads_per_node(numa_node_count, 0);
+
 		for (idx_t i = 0; i < create_new_threads; i++) {
 			// launch a thread and assign it a cancellation marker
 			auto marker = unique_ptr<atomic<bool>>(new atomic<bool>(true));
@@ -549,7 +562,19 @@ void TaskScheduler::RelaunchThreadsInternal(int32_t n) {
 			try {
 				worker_thread = make_uniq<thread>(ThreadExecuteTasks, this, marker.get());
 				if (pin_threads) {
-					SetThreadAffinity(*worker_thread, NumericCast<int>(threads.size()));
+					idx_t cpu_id;
+					if (use_numa) {
+						// Distribute threads across NUMA nodes in round-robin fashion
+						idx_t total_thread_index = threads.size() + i;
+						idx_t numa_node = total_thread_index % numa_node_count;
+						idx_t thread_index_in_node = threads_per_node[numa_node];
+						cpu_id = NUMATopology::GetNextCPUForNUMANode(numa_node, thread_index_in_node);
+						threads_per_node[numa_node]++;
+					} else {
+						// Fallback to sequential assignment when NUMA is not available
+						cpu_id = threads.size() + i;
+					}
+					SetThreadAffinity(*worker_thread, NumericCast<int>(cpu_id));
 				}
 			} catch (std::exception &ex) {
 				// thread constructor failed - this can happen when the system has too many threads allocated

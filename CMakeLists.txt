@@ -24,6 +24,21 @@ project(DuckDB)
 
 find_package(Threads REQUIRED)
 
+# Check for NUMA library (Linux only)
+if(UNIX AND NOT APPLE)
+  find_library(NUMA_LIBRARY numa)
+  if(NUMA_LIBRARY)
+    set(DUCKDB_USE_NUMA TRUE)
+    add_definitions(-DDUCKDB_USE_NUMA)
+    message(STATUS "Found NUMA library: ${NUMA_LIBRARY}")
+  else()
+    set(DUCKDB_USE_NUMA FALSE)
+    message(STATUS "NUMA library not found - NUMA support disabled")
+  endif()
+else()
+  set(DUCKDB_USE_NUMA FALSE)
+endif()
+
 set(DUCKDB_MODULE_BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

@@ -23,6 +23,8 @@ public:
 	//! The operator profiler for the individual thread context
 	OperatorProfiler profiler;
 	unique_ptr<Logger> logger;
+	//! The NUMA node ID this thread is assigned to (0 if NUMA is not available)
+	idx_t numa_node_id = 0;
 };
 
 } // namespace duckdb

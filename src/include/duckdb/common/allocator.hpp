@@ -129,6 +129,9 @@ public:
 	static void FlushAll();
 	static void SetBackgroundThreads(bool enable);
 
+	//! Set the NUMA node for the current thread (used for NUMA-aware allocation)
+	static void SetThreadNUMANode(idx_t numa_node);
+
 private:
 	allocate_function_ptr_t allocate_function;
 	free_function_ptr_t free_function;

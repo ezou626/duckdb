@@ -7,6 +7,8 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/numa_topology.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 
 #include <cstdint>
 
@@ -33,7 +35,34 @@
 #include <malloc.h>
 #endif
 
+#ifdef DUCKDB_USE_NUMA
+#include <numa.h>
+#include <numaif.h>
+#endif
+
 namespace duckdb {
+
+// Thread-local storage for NUMA node ID
+// This is set when ThreadContext is created and used for NUMA-aware allocation
+static thread_local idx_t thread_numa_node = 0;
+static thread_local bool thread_numa_node_initialized = false;
+
+// Get the NUMA node for the current thread
+static idx_t GetCurrentThreadNUMANode() {
+	if (!thread_numa_node_initialized) {
+		NUMATopology::Initialize();
+		idx_t cpu_id = TaskScheduler::GetEstimatedCPUId();
+		thread_numa_node = NUMATopology::GetNUMANodeForCPU(cpu_id);
+		thread_numa_node_initialized = true;
+	}
+	return thread_numa_node;
+}
+
+// Set the NUMA node for the current thread (called from ThreadContext)
+void Allocator::SetThreadNUMANode(idx_t numa_node) {
+	thread_numa_node = numa_node;
+	thread_numa_node_initialized = true;
+}
 
 AllocatedData::AllocatedData() : allocator(nullptr), pointer(nullptr), allocated_size(0) {
 }
@@ -187,6 +216,23 @@ data_ptr_t Allocator::DefaultAllocate(PrivateAllocatorData *private_data, idx_t 
 #ifdef USE_JEMALLOC
 	return JemallocExtension::Allocate(private_data, size);
 #else
+#ifdef DUCKDB_USE_NUMA
+	// Use NUMA-aware allocation if available and NUMA is enabled
+	// Note: We check NUMATopology::IsNUMAAvailable() here, but enable_numa
+	// is checked at a higher level (when setting thread NUMA node)
+	if (NUMATopology::IsNUMAAvailable()) {
+		idx_t numa_node = GetCurrentThreadNUMANode();
+		void *ptr = numa_alloc_onnode(size, NumericCast<int>(numa_node));
+		if (!ptr) {
+			// Fallback to regular malloc if NUMA allocation fails
+			ptr = malloc(size);
+		}
+		if (!ptr) {
+			throw std::bad_alloc();
+		}
+		return data_ptr_cast(ptr);
+	}
+#endif
 	auto default_allocate_result = malloc(size);
 	if (!default_allocate_result) {
 		throw std::bad_alloc();
@@ -199,6 +245,14 @@ void Allocator::DefaultFree(PrivateAllocatorData *private_data, data_ptr_t point
 #ifdef USE_JEMALLOC
 	JemallocExtension::Free(private_data, pointer, size);
 #else
+#ifdef DUCKDB_USE_NUMA
+	// Use NUMA-aware free if available and NUMA is enabled
+	// Note: numa_free is safe to call on non-NUMA pointers (it will call free internally)
+	if (NUMATopology::IsNUMAAvailable()) {
+		numa_free(pointer, size);
+		return;
+	}
+#endif
 	free(pointer);
 #endif
 }
@@ -208,6 +262,22 @@ data_ptr_t Allocator::DefaultReallocate(PrivateAllocatorData *private_data, data
 #ifdef USE_JEMALLOC
 	return JemallocExtension::Reallocate(private_data, pointer, old_size, size);
 #else
+#ifdef DUCKDB_USE_NUMA
+	// For reallocation with NUMA, we need to allocate new memory and copy
+	// NUMA doesn't have a direct realloc equivalent
+	if (NUMATopology::IsNUMAAvailable() && pointer != nullptr) {
+		idx_t numa_node = GetCurrentThreadNUMANode();
+		void *new_ptr = numa_alloc_onnode(size, NumericCast<int>(numa_node));
+		if (new_ptr) {
+			// Copy old data (up to minimum of old_size and size)
+			idx_t copy_size = size < old_size ? size : old_size;
+			memcpy(new_ptr, pointer, copy_size);
+			numa_free(pointer, old_size);
+			return data_ptr_cast(new_ptr);
+		}
+		// Fall through to regular realloc if NUMA allocation fails
+	}
+#endif
 	return data_ptr_cast(realloc(pointer, size));
 #endif
 }
