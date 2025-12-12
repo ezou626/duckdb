@@ -40,6 +40,10 @@ public:
 	//! Get the total number of CPUs in the system
 	DUCKDB_API static idx_t GetCPUCount();
 
+	//! Get an alternate NUMA node (for migration when current node has failures)
+	//! Returns a different node than the current one, or the same node if only one exists
+	DUCKDB_API static idx_t GetAlternateNUMANode(idx_t current_node);
+
 private:
 	static bool initialized;
 	static bool numa_available;

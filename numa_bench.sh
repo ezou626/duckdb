@@ -17,9 +17,20 @@ BENCHMARK_EXPR="$1"
 OUTDIR=run_numa_$(date +%s)
 mkdir -p "$OUTDIR"
 
+numastat | \
+    awk -v ts="$TS" '
+        /^[A-Za-z]/ {
+            name=$1
+            gsub(":", "", name)
+            printf "%s,%s", ts, name
+            for (i=2;i<=NF;i++) printf ",%s", $i
+            printf "\n"
+        } # /^[A-Za-z]/
+    ' > "$OUTDIR/numastat_init.csv"
+
 # Start DuckDB benchmark runner
 echo "[*] Starting DuckDB benchmark runner..."
-numactl $RUNNER "$BENCHMARK_EXPR" --out="$OUTDIR/timings.log" &
+$RUNNER "$BENCHMARK_EXPR" --out="$OUTDIR/timings.log" &
 BENCHPID=$!
 
 echo "[*] Benchmark PID = $BENCHPID"
@@ -54,10 +65,19 @@ NUMAPID=$!
 echo "[*] Waiting for DuckDB benchmark to finish..."
 wait "$BENCHPID"
 
+numastat | \
+    awk -v ts="$TS" '
+        /^[A-Za-z]/ {
+            name=$1
+            gsub(":", "", name)
+            printf "%s,%s", ts, name
+            for (i=2;i<=NF;i++) printf ",%s", $i
+            printf "\n"
+        } # /^[A-Za-z]/
+    ' > "$OUTDIR/numastat_final.csv"
+
 # Cleanup
 echo "[*] Benchmark complete. Killing numastat..."
 kill "$NUMAPID" 2>/dev/null || true
 
 echo "[*] Done! Results in: $OUTDIR/"
-echo "    - numastat.csv"
-echo "    - timings.log"

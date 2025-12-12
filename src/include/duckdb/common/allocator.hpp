@@ -131,6 +131,10 @@ public:
 
 	//! Set the NUMA node for the current thread (used for NUMA-aware allocation)
 	static void SetThreadNUMANode(idx_t numa_node);
+	//! Set the NUMA allocation failure threshold for the current thread
+	static void SetNUMAFailureThreshold(idx_t threshold);
+	//! Get the current NUMA allocation failure count for the current thread
+	static idx_t GetNUMAFailureCount();
 
 private:
 	allocate_function_ptr_t allocate_function;

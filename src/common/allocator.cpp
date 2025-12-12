@@ -42,10 +42,12 @@
 
 namespace duckdb {
 
-// Thread-local storage for NUMA node ID
+// Thread-local storage for NUMA node ID and failure tracking
 // This is set when ThreadContext is created and used for NUMA-aware allocation
 static thread_local idx_t thread_numa_node = 0;
 static thread_local bool thread_numa_node_initialized = false;
+static thread_local idx_t numa_allocation_failures = 0;
+static thread_local idx_t numa_failure_threshold = 10; // Default threshold
 
 // Get the NUMA node for the current thread
 static idx_t GetCurrentThreadNUMANode() {
@@ -54,14 +56,36 @@ static idx_t GetCurrentThreadNUMANode() {
 		idx_t cpu_id = TaskScheduler::GetEstimatedCPUId();
 		thread_numa_node = NUMATopology::GetNUMANodeForCPU(cpu_id);
 		thread_numa_node_initialized = true;
+		numa_allocation_failures = 0; // Reset on initialization
 	}
 	return thread_numa_node;
+}
+
+// Migrate thread to an alternate NUMA node when current node has too many failures
+static void MigrateToAlternateNUMANode() {
+	idx_t current_node = thread_numa_node;
+	idx_t alternate_node = NUMATopology::GetAlternateNUMANode(current_node);
+	if (alternate_node != current_node) {
+		thread_numa_node = alternate_node;
+		numa_allocation_failures = 0; // Reset counter after migration
+	}
 }
 
 // Set the NUMA node for the current thread (called from ThreadContext)
 void Allocator::SetThreadNUMANode(idx_t numa_node) {
 	thread_numa_node = numa_node;
 	thread_numa_node_initialized = true;
+	numa_allocation_failures = 0; // Reset counter when explicitly set
+}
+
+// Set the NUMA allocation failure threshold for the current thread
+void Allocator::SetNUMAFailureThreshold(idx_t threshold) {
+	numa_failure_threshold = threshold;
+}
+
+// Get the current NUMA allocation failure count for the current thread
+idx_t Allocator::GetNUMAFailureCount() {
+	return numa_allocation_failures;
 }
 
 AllocatedData::AllocatedData() : allocator(nullptr), pointer(nullptr), allocated_size(0) {
@@ -223,10 +247,34 @@ data_ptr_t Allocator::DefaultAllocate(PrivateAllocatorData *private_data, idx_t 
 	if (NUMATopology::IsNUMAAvailable()) {
 		idx_t numa_node = GetCurrentThreadNUMANode();
 		void *ptr = numa_alloc_onnode(size, NumericCast<int>(numa_node));
+		
 		if (!ptr) {
-			// Fallback to regular malloc if NUMA allocation fails
-			ptr = malloc(size);
+			// NUMA allocation failed - increment failure counter
+			numa_allocation_failures++;
+			
+			// Check if we've exceeded the threshold and should migrate
+			if (numa_allocation_failures >= numa_failure_threshold) {
+				MigrateToAlternateNUMANode();
+				// Try allocation on the new node
+				numa_node = GetCurrentThreadNUMANode();
+				ptr = numa_alloc_onnode(size, NumericCast<int>(numa_node));
+				
+				// If still failing after migration, fall back to regular malloc
+				if (!ptr) {
+					ptr = malloc(size);
+				} else {
+					// Success on new node - reset counter
+					numa_allocation_failures = 0;
+				}
+			} else {
+				// Below threshold - fall back to regular malloc for this allocation
+				ptr = malloc(size);
+			}
+		} else {
+			// Successful NUMA allocation - reset failure counter
+			numa_allocation_failures = 0;
 		}
+		
 		if (!ptr) {
 			throw std::bad_alloc();
 		}

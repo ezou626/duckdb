@@ -221,6 +221,8 @@ struct DBConfigOptions {
 	ThreadPinMode pin_threads = ThreadPinMode::AUTO;
 	//! Whether to enable NUMA awareness (default: true, auto-detects NUMA availability)
 	bool enable_numa = true;
+	//! Threshold for NUMA allocation failures before migrating to alternate node (default: 10)
+	idx_t numa_failure_threshold = 10;
 
 	bool operator==(const DBConfigOptions &other) const;
 };

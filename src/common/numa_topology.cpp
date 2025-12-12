@@ -153,6 +153,20 @@ idx_t NUMATopology::GetCPUCount() {
 	return cpu_count;
 }
 
+idx_t NUMATopology::GetAlternateNUMANode(idx_t current_node) {
+	if (!initialized) {
+		Initialize();
+	}
+	
+	if (numa_node_count <= 1) {
+		return current_node; // No alternate available
+	}
+	
+	// Simple round-robin: try next node, wrapping around
+	idx_t next_node = (current_node + 1) % numa_node_count;
+	return next_node;
+}
+
 } // namespace duckdb
 
 

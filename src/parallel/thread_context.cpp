@@ -35,6 +35,9 @@ ThreadContext::ThreadContext(ClientContext &context) : profiler(context) {
 		
 		// Set the NUMA node for this thread in the allocator
 		Allocator::SetThreadNUMANode(numa_node_id);
+		
+		// Set the failure threshold from config
+		Allocator::SetNUMAFailureThreshold(config.options.numa_failure_threshold);
 	} else {
 		// NUMA is disabled or not available, use node 0
 		numa_node_id = 0;
